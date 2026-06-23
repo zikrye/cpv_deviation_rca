@@ -1,0 +1,27 @@
+[project]
+name = "rca-copilot"
+version = "0.1.0"
+description = "Biotech Deviation RCA Copilot — CPV-triggered, AI-assisted fishbone RCA support demo (synthetic data only)"
+requires-python = ">=3.9"
+dependencies = [
+    "streamlit>=1.33",
+    "pandas>=2.0",
+    "plotly>=5.20",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+rag = ["chromadb>=0.5"]
+llm = ["anthropic>=0.40"]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

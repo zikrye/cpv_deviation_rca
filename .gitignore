@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.streamlit/secrets.toml
+.chroma/
+chroma_db/
+.DS_Store
+.claude/

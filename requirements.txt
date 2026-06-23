@@ -1,0 +1,11 @@
+# Core demo dependencies
+streamlit>=1.33
+pandas>=2.0
+plotly>=5.20
+numpy>=1.24
+
+# Phase 7 (local RAG) — optional, app degrades gracefully without it
+# chromadb>=0.5
+
+# Phase 8 (LLM summary) — optional
+# anthropic>=0.40
