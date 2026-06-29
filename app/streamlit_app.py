@@ -20,42 +20,39 @@ import streamlit.components.v1 as components
 
 from rca_copilot import DISCLAIMER
 from rca_copilot.cpv import (
-    METRIC,
-    TITER_UNIT,
+    OSMO_SPEC,
+    PH_SPEC,
+    TITER_SPEC,
     compute_control_limits,
     cpv_chart,
     summarize_violations,
-    to_linear,
 )
 from rca_copilot.data.synthetic import AFFECTED_BATCHES, load_dataset
 from rca_copilot.nelson import RULE_DESCRIPTIONS
 from rca_copilot.evidence import evidence_for
 from rca_copilot.llm import draft_summary
 from rca_copilot.scoring import score_fishbone
-from rca_copilot.signals import detect_low_titer_signals
+from rca_copilot.signals import detect_signals
 from rca_copilot.viz import fishbone_svg_html
 
 st.set_page_config(page_title="Deviation RCA Copilot", page_icon="🧪", layout="wide")
 
 TITER_TEST = "Titer (plaque assay, PFU/mL)"
 
-#: Test label -> (batch column, display unit, number_input step, printf format).
+#: Test label -> (charted MetricSpec, number_input printf format).
 TEST_SPECS = {
-    TITER_TEST: (METRIC, TITER_UNIT, 1.0e4, "%.0f"),
-    "pH": ("ph_at_harvest", "", 0.01, "%.2f"),
-    "Osmolality": ("osmolality_mosm_kg", "mOsm/kg", 1.0, "%.0f"),
+    TITER_TEST: (TITER_SPEC, "%.0f"),
+    "pH": (PH_SPEC, "%.2f"),
+    "Osmolality": (OSMO_SPEC, "%.0f"),
 }
 TESTS = list(TEST_SPECS)
 
 
 def _fmt_result(test: str, value: float) -> str:
     """Format a result with the right precision/unit for its test."""
-    unit = TEST_SPECS[test][1]
-    if test == TITER_TEST:
-        return f"{value:.2e} {unit}"
-    if test == "Osmolality":
-        return f"{value:.0f} {unit}"
-    return f"{value:.2f}"
+    spec = TEST_SPECS[test][0]
+    unit = f" {spec.unit}" if spec.unit else ""
+    return f"{value:{spec.fmt}}{unit}"
 
 
 @st.cache_data
@@ -63,20 +60,17 @@ def _load():
     """Input-independent data: the synthetic dataset + evidence-based fishbone."""
     ds = load_dataset()
     fb = score_fishbone(ds)
-    # Established control limits come from the in-control baseline history; they
-    # are NOT recomputed when a new record arrives.
-    limits = compute_control_limits(ds.batches)
-    return ds, fb, limits
+    return ds, fb
 
 
-dataset, fb_scores, limits = _load()
+dataset, fb_scores = _load()
 batch_opts = dataset.batches.sort_values("date")["batch_id"].tolist()
 _batch_rows = dataset.batches.set_index("batch_id")
 
 
 def _recorded(batch_id: str, test: str) -> float:
     """Recorded value for a batch's selected test parameter (0.0 if unknown)."""
-    col = TEST_SPECS[test][0]
+    col = TEST_SPECS[test][0].column
     if batch_id in _batch_rows.index:
         return float(_batch_rows.loc[batch_id, col])
     return 0.0
@@ -101,13 +95,20 @@ with st.sidebar:
     st.caption("Simulates a LIMS/QMS record arriving for triage.")
     st.selectbox("Batch ID", batch_opts, key="dev_batch", on_change=_sync_result)
     st.selectbox("Test", TESTS, key="dev_test", on_change=_sync_result)
-    _step, _fmt = TEST_SPECS[st.session_state.dev_test][2:]
-    st.number_input("Result", key="dev_result", step=_step, format=_fmt)
+    _spec, _fmt = TEST_SPECS[st.session_state.dev_test]
+    st.number_input("Result", key="dev_result", step=_spec.input_step, format=_fmt)
     run = st.button("▶ Run RCA analysis", type="primary", use_container_width=True)
-    st.caption(
-        f"Spec floor (LSL) on titer: {to_linear(limits.lsl):.2e} {TITER_UNIT} "
-        f"(log₁₀ {limits.lsl:.2f}). CPV is charted in log₁₀ PFU/mL."
-    )
+    _u = f" {_spec.unit}" if _spec.unit else ""
+    if _spec.usl is not None:
+        st.caption(
+            f"Spec band for {_spec.label}: {_spec.lsl:{_spec.fmt}}–"
+            f"{_spec.usl:{_spec.fmt}}{_u}. CPV charts the selected parameter."
+        )
+    else:
+        st.caption(
+            f"Spec floor (LSL) for {_spec.label}: {_spec.lsl:{_spec.fmt}}{_u}. "
+            "Titer is charted in log₁₀."
+        )
 
 if run:
     st.session_state.rca = {
@@ -138,12 +139,14 @@ if run:
     ):
         time.sleep(1.1)
 
-# Apply the incoming record to the series (only the titer test is modeled here).
-is_titer = rca["test"] == TITER_TEST
+# The selected test drives which parameter the CPV chart + signal reflect.
+spec = TEST_SPECS[rca["test"]][0]
+# Established control limits come from the in-control baseline history; they are
+# NOT recomputed when a new record arrives (the excursion batches aren't baseline).
+limits = compute_control_limits(dataset.batches, spec)
 batches = dataset.batches.copy()
-if is_titer:
-    batches.loc[batches["batch_id"] == rca["batch"], METRIC] = rca["result"]
-signals = detect_low_titer_signals(batches, limits)
+batches.loc[batches["batch_id"] == rca["batch"], spec.column] = rca["result"]
+signals = detect_signals(batches, limits)
 
 # --- Incoming record summary ------------------------------------------------
 with st.container(border=True):
@@ -152,11 +155,6 @@ with st.container(border=True):
     c1.metric("Batch", rca["batch"])
     c2.metric("Test", rca["test"])
     c3.metric("Result", _fmt_result(rca["test"], rca["result"]))
-    if not is_titer:
-        st.caption(
-            f"This CPV demo models titer only; '{rca['test']}' is recorded but the "
-            "chart/signal below reflect the recorded harvest titer."
-        )
 
 # Gate: no signal -> no investigation triggered.
 flagged = {s.batch_id: s for s in signals}
@@ -190,7 +188,7 @@ if rca["batch"] in flagged:
     st.error(f"**{s.batch_id} — {s.severity}**: {s.description}", icon="🚨")
 else:
     st.success(
-        f"{rca['batch']} is within limits — no low-titer signal for this record.",
+        f"{rca['batch']} is within limits — no {spec.label} signal for this record.",
         icon="✅",
     )
 others = [s for s in signals if s.batch_id != rca["batch"]]
@@ -198,11 +196,17 @@ if others:
     with st.expander(f"Other flagged batches in the campaign ({len(others)})"):
         for s in others:
             st.markdown(f"- **{s.batch_id} — {s.severity}**: {s.description}")
-st.caption("Rule-based detection (no ML): titer < LSL ⇒ OOS; titer < LCL ⇒ OOT.")
+st.caption(
+    "Rule-based detection (no ML): outside spec limits ⇒ OOS; "
+    "beyond control limits ⇒ OOT."
+)
 
 # --- 3: Fishbone priorities -------------------------------------------------
 st.subheader("3 · Fishbone — evidence-based priority")
-effect = f"Low harvest titer ({rca['batch']})" if is_titer else f"{rca['test']} deviation ({rca['batch']})"
+effect = (
+    f"Low harvest titer ({rca['batch']})" if spec is TITER_SPEC
+    else f"{spec.label} deviation ({rca['batch']})"
+)
 components.html(fishbone_svg_html(fb_scores, effect), height=600, scrolling=False)
 with st.expander("Priority table (all scored branches)"):
     st.dataframe(
@@ -218,15 +222,34 @@ choice = st.selectbox("Inspect a candidate cause branch:", options)
 sel_cat, sel_sub = choice.split(" → ", 1)
 cards = evidence_for(dataset, sel_cat, sel_sub)
 
-if not cards:
-    st.info("No supporting records for this branch.")
-for c in cards:
+TOP_CARDS = 3
+
+
+def _render_card(c) -> None:
     with st.container(border=True):
         head = f"**{c.type_label} {c.citation}** · score {c.score:.2f}"
         meta = " · ".join(filter(None, [c.date, c.batch_id, c.outcome]))
         st.markdown(head + (f"  \n_{meta}_" if meta else ""))
         st.write(c.title)
 
+
+if not cards:
+    st.info("No supporting records for this branch.")
+else:
+    # Cards arrive sorted by score (desc); show the strongest few, hide the rest.
+    for c in cards[:TOP_CARDS]:
+        _render_card(c)
+    if len(cards) > TOP_CARDS:
+        with st.expander(f"Show {len(cards) - TOP_CARDS} more record(s)"):
+            for c in cards[TOP_CARDS:]:
+                _render_card(c)
+
 # --- 5: Draft summary -------------------------------------------------------
+# The RCA is anchored on the titer excursion (the fishbone evidence corpus), so
+# the draft summary always reports the titer signal regardless of which
+# parameter is currently charted — low titer, low pH and high osmolality on the
+# same batches point at the one shared cause.
 st.subheader("5 · Draft investigation support summary")
-st.markdown(draft_summary(dataset, signals, fb_scores))
+titer_limits = compute_control_limits(dataset.batches, TITER_SPEC)
+titer_signals = detect_signals(dataset.batches, titer_limits)
+st.markdown(draft_summary(dataset, titer_signals, fb_scores))

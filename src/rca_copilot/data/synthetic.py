@@ -71,7 +71,10 @@ def generate_batches(seed: int = SEED) -> pd.DataFrame:
     off-target (low pH, elevated osmolality) consistent with the media-lot story.
     """
     rng = np.random.default_rng(seed)
-    dates = pd.date_range("2025-01-15", periods=N_BATCHES, freq="MS") + pd.Timedelta(days=14)
+    # Anchor on the month start so the +14d offset lands mid-month: the campaign
+    # runs Jan-2025 → Dec-2025, putting XX0007 in Jul and XX0008 in Aug to match
+    # the investigation story and the deviation/change-control record dates.
+    dates = pd.date_range("2025-01-01", periods=N_BATCHES, freq="MS") + pd.Timedelta(days=14)
 
     titer = np.round(rng.normal(5.0e5, 0.22e5, N_BATCHES), -3)
     low = {"XX0007": 3.62e5, "XX0008": 3.74e5}  # the triggering excursion
@@ -91,6 +94,9 @@ def generate_batches(seed: int = SEED) -> pd.DataFrame:
             }
         )
     df = pd.DataFrame(rows)
+    # Keep in-control batches within the validated harvest-pH band so the only
+    # batches that break trend on the pH control chart are the excursion ones.
+    df["ph_at_harvest"] = df["ph_at_harvest"].clip(lower=6.95, upper=7.05)
     # Make the excursion physically consistent: low titer tracks low VCD, a
     # depressed harvest pH and elevated osmolality (the media-lot fingerprint).
     affected = df.batch_id.isin(AFFECTED_BATCHES)
