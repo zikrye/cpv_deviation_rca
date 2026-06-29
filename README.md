@@ -10,8 +10,12 @@ Analysis (RCA) support workflow** for biotech/pharma manufacturing.
 
 ## The workflow it demonstrates
 
-1. **CPV chart** — harvest titer by batch; control limits from an in-control
-   baseline. Batches `XX0007` and `XX0008` run low.
+1. **CPV chart** — infectious harvest titer (plaque assay) by batch for a
+   synthetic viral vector (`VV-Demo-A`), charted in **log₁₀ PFU/mL** (titer is
+   log-normal, so limits and Nelson rules are computed in log space); control
+   limits from an in-control baseline. Batches `XX0007` and `XX0008` run low.
+   pH (~7.0) and osmolality (~500 mOsm/kg) are recorded per batch and drift
+   off-target on those batches.
 2. **Deterministic signal** — a transparent rule (titer < LSL ⇒ OOS, < LCL ⇒
    OOT) raises a low-titer process deviation signal.
 3. **Fishbone RCA view** — interactive 6M Ishikawa breakdown.
@@ -22,7 +26,7 @@ Analysis (RCA) support workflow** for biotech/pharma manufacturing.
 
 In the bundled story, a media/feed lot changeover (`CC-2025-014`) just before
 the excursion makes **Material → Cell culture media / feed lot** the top
-candidate cause, while a *cleared* titer-assay investigation keeps the
+candidate cause, while a *cleared* plaque titer-assay investigation keeps the
 Measurement branch appropriately low.
 
 ## Quick start

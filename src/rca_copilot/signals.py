@@ -1,17 +1,22 @@
 """Deterministic signal detection (Phase 3).
 
-A plain rule engine — no ML, no LLM. A batch raises a signal when its harvest
-titer is out-of-spec (< LSL) or out-of-trend (< lower control limit). The rules
-are explicit and auditable, which is the point in a GMP-adjacent context.
+A plain rule engine — no ML, no LLM. A batch raises a signal when its infectious
+harvest titer (PFU/mL) is out-of-spec (< LSL) or out-of-trend (< lower control
+limit). The rules are explicit and auditable, the point in a GMP-adjacent context.
+
+The comparison is done in log10 space — titer is log-normal and the CPV limits
+are log10 PFU/mL (see ``cpv``) — but ``Signal.value``/``threshold`` and the
+human-readable text are reported in linear PFU/mL.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pandas as pd
 
-from rca_copilot.cpv import METRIC, ControlLimits
+from rca_copilot.cpv import METRIC, ControlLimits, to_linear
 
 
 @dataclass(frozen=True)
@@ -33,25 +38,26 @@ def detect_low_titer_signals(batches: pd.DataFrame, limits: ControlLimits) -> li
     signals: list[Signal] = []
     for _, row in batches.sort_values("date").iterrows():
         value = float(row[METRIC])
-        if value < limits.lsl:
+        log_value = math.log10(value)
+        if log_value < limits.lsl:
             signals.append(
                 Signal(
                     batch_id=row["batch_id"], metric=METRIC, value=value, rule="OOS",
-                    threshold=limits.lsl,
+                    threshold=to_linear(limits.lsl),
                     description=(
-                        f"Harvest titer {value:.2f} g/L below lower spec limit "
-                        f"{limits.lsl:.2f} g/L."
+                        f"Harvest titer {value:.2e} PFU/mL below lower spec limit "
+                        f"{to_linear(limits.lsl):.2e} PFU/mL."
                     ),
                 )
             )
-        elif value < limits.lcl:
+        elif log_value < limits.lcl:
             signals.append(
                 Signal(
                     batch_id=row["batch_id"], metric=METRIC, value=value, rule="OOT",
-                    threshold=limits.lcl,
+                    threshold=to_linear(limits.lcl),
                     description=(
-                        f"Harvest titer {value:.2f} g/L below lower control limit "
-                        f"{limits.lcl:.2f} g/L."
+                        f"Harvest titer {value:.2e} PFU/mL below lower control limit "
+                        f"{to_linear(limits.lcl):.2e} PFU/mL."
                     ),
                 )
             )

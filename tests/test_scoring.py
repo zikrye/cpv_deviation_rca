@@ -19,11 +19,11 @@ def test_material_media_is_top_candidate():
 
 
 def test_cleared_assay_ranks_below_implicating_evidence():
-    """The titer-assay branch was cleared, so it must not outrank Material."""
+    """The plaque titer-assay branch was cleared, so it must not outrank Material."""
     fb = score_fishbone(load_dataset())
     scores = {(r.category, r.subcategory): r.score for r in fb.itertuples()}
     material = scores[("Material (Raw Materials)", "Cell culture media / feed lot")]
-    assay = scores.get(("Measurement (Analytical)", "Titer assay (HPLC)"), 0.0)
+    assay = scores.get(("Measurement (Analytical)", "Titer assay (plaque)"), 0.0)
     assert material > assay
 
 

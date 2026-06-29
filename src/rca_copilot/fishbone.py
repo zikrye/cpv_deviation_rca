@@ -27,7 +27,7 @@ FISHBONE: dict[str, list[str]] = {
         "Chromatography skid",
     ],
     "Measurement (Analytical)": [
-        "Titer assay (HPLC)",
+        "Titer assay (plaque)",
         "Cell count / viability",
         "Bioburden / endotoxin",
         "Calibration",

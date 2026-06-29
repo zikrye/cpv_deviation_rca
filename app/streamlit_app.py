@@ -21,9 +21,11 @@ import streamlit.components.v1 as components
 from rca_copilot import DISCLAIMER
 from rca_copilot.cpv import (
     METRIC,
+    TITER_UNIT,
     compute_control_limits,
     cpv_chart,
     summarize_violations,
+    to_linear,
 )
 from rca_copilot.data.synthetic import AFFECTED_BATCHES, load_dataset
 from rca_copilot.nelson import RULE_DESCRIPTIONS
@@ -35,8 +37,25 @@ from rca_copilot.viz import fishbone_svg_html
 
 st.set_page_config(page_title="Deviation RCA Copilot", page_icon="🧪", layout="wide")
 
-TESTS = ["Titer (Protein A HPLC)", "pH", "Osmolality"]
-TITER_TEST = TESTS[0]
+TITER_TEST = "Titer (plaque assay, PFU/mL)"
+
+#: Test label -> (batch column, display unit, number_input step, printf format).
+TEST_SPECS = {
+    TITER_TEST: (METRIC, TITER_UNIT, 1.0e4, "%.0f"),
+    "pH": ("ph_at_harvest", "", 0.01, "%.2f"),
+    "Osmolality": ("osmolality_mosm_kg", "mOsm/kg", 1.0, "%.0f"),
+}
+TESTS = list(TEST_SPECS)
+
+
+def _fmt_result(test: str, value: float) -> str:
+    """Format a result with the right precision/unit for its test."""
+    unit = TEST_SPECS[test][1]
+    if test == TITER_TEST:
+        return f"{value:.2e} {unit}"
+    if test == "Osmolality":
+        return f"{value:.0f} {unit}"
+    return f"{value:.2f}"
 
 
 @st.cache_data
@@ -51,31 +70,44 @@ def _load():
 
 
 dataset, fb_scores, limits = _load()
-titer_lookup = {
-    r.batch_id: round(float(getattr(r, METRIC)), 2) for r in dataset.batches.itertuples()
-}
 batch_opts = dataset.batches.sort_values("date")["batch_id"].tolist()
+_batch_rows = dataset.batches.set_index("batch_id")
+
+
+def _recorded(batch_id: str, test: str) -> float:
+    """Recorded value for a batch's selected test parameter (0.0 if unknown)."""
+    col = TEST_SPECS[test][0]
+    if batch_id in _batch_rows.index:
+        return float(_batch_rows.loc[batch_id, col])
+    return 0.0
+
 
 # --- Sidebar: incoming deviation trigger ------------------------------------
 if "dev_batch" not in st.session_state:
     st.session_state.dev_batch = AFFECTED_BATCHES[0]  # XX0007
     st.session_state.dev_test = TITER_TEST
-    st.session_state.dev_result = titer_lookup[AFFECTED_BATCHES[0]]
+    st.session_state.dev_result = _recorded(AFFECTED_BATCHES[0], TITER_TEST)
 
 
 def _sync_result() -> None:
-    """When the batch changes, prefill the result with its recorded titer."""
-    st.session_state.dev_result = titer_lookup.get(st.session_state.dev_batch, 0.0)
+    """Prefill the result with the batch's recorded value for the chosen test."""
+    st.session_state.dev_result = _recorded(
+        st.session_state.dev_batch, st.session_state.dev_test
+    )
 
 
 with st.sidebar:
     st.header("Incoming deviation")
     st.caption("Simulates a LIMS/QMS record arriving for triage.")
     st.selectbox("Batch ID", batch_opts, key="dev_batch", on_change=_sync_result)
-    st.selectbox("Test", TESTS, key="dev_test")
-    st.number_input("Result", key="dev_result", step=0.1, format="%.2f")
+    st.selectbox("Test", TESTS, key="dev_test", on_change=_sync_result)
+    _step, _fmt = TEST_SPECS[st.session_state.dev_test][2:]
+    st.number_input("Result", key="dev_result", step=_step, format=_fmt)
     run = st.button("▶ Run RCA analysis", type="primary", use_container_width=True)
-    st.caption(f"Spec floor (LSL) on titer: {limits.lsl:.2f} g/L.")
+    st.caption(
+        f"Spec floor (LSL) on titer: {to_linear(limits.lsl):.2e} {TITER_UNIT} "
+        f"(log₁₀ {limits.lsl:.2f}). CPV is charted in log₁₀ PFU/mL."
+    )
 
 if run:
     st.session_state.rca = {
@@ -119,8 +151,7 @@ with st.container(border=True):
     c1, c2, c3 = st.columns(3)
     c1.metric("Batch", rca["batch"])
     c2.metric("Test", rca["test"])
-    unit = " g/L" if is_titer else ""
-    c3.metric("Result", f"{rca['result']:.2f}{unit}")
+    c3.metric("Result", _fmt_result(rca["test"], rca["result"]))
     if not is_titer:
         st.caption(
             f"This CPV demo models titer only; '{rca['test']}' is recorded but the "
@@ -131,7 +162,8 @@ with st.container(border=True):
 flagged = {s.batch_id: s for s in signals}
 if rca["batch"] not in flagged and not signals:
     st.success(
-        f"No deviation signal for {rca['batch']} at {rca['result']:.2f} g/L — "
+        f"No deviation signal for {rca['batch']} at "
+        f"{_fmt_result(rca['test'], rca['result'])} — "
         "result is within control/spec limits. No RCA triggered.",
         icon="✅",
     )
